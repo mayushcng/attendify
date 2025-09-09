@@ -1,10 +1,7 @@
-import React, { useState, useEffect } from 'react';
-import api from '../api'; // <-- This line is changed
+import React, { useState, useEffect, useRef } from 'react';
+import api from '../api';
 import { QRCodeSVG } from 'qrcode.react';
 import { Link, useNavigate } from 'react-router-dom';
-import io from 'socket.io-client';
-
-let socket;
 
 function Dashboard() {
   const navigate = useNavigate();
@@ -12,6 +9,7 @@ function Dashboard() {
   const [timer, setTimer] = useState(0);
   const [unverifiedStudents, setUnverifiedStudents] = useState([]);
   const [liveAttendance, setLiveAttendance] = useState([]);
+  const intervalRef = useRef(null); // Ref to hold the interval ID
 
   const fetchUnverifiedStudents = async () => {
     try {
@@ -27,20 +25,33 @@ function Dashboard() {
 
   useEffect(() => {
     fetchUnverifiedStudents();
+    // Cleanup interval when the component is unmounted
     return () => {
-      if (socket) socket.disconnect();
+      if (intervalRef.current) clearInterval(intervalRef.current);
     };
   }, []);
+  
+  const fetchAttendance = async (sessionId) => {
+    try {
+        const token = localStorage.getItem('token');
+        const response = await api.get(`/api/attendance/${sessionId}`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        setLiveAttendance(response.data);
+    } catch (error) {
+        console.error("Failed to fetch attendance", error);
+    }
+  };
 
   useEffect(() => {
-    let interval;
+    let countdownInterval;
     if (timer > 0) {
-      interval = setInterval(() => setTimer(t => t - 1), 1000);
+      countdownInterval = setInterval(() => setTimer(t => t - 1), 1000);
     } else if (timer === 0 && qrCodeData) {
       setQrCodeData(null);
-      if (socket) socket.disconnect();
+      if (intervalRef.current) clearInterval(intervalRef.current); // Stop polling
     }
-    return () => clearInterval(interval);
+    return () => clearInterval(countdownInterval);
   }, [timer, qrCodeData]);
   
   const handleApprove = async (studentId) => {
@@ -57,6 +68,7 @@ function Dashboard() {
   };
 
   const handleGenerateQR = async () => {
+    if (intervalRef.current) clearInterval(intervalRef.current); // Clear any old polling interval
     try {
       const token = localStorage.getItem('token');
       const response = await api.post('/api/sessions/create', {}, {
@@ -68,12 +80,10 @@ function Dashboard() {
       setLiveAttendance([]);
       setTimer(120);
       
-      const socket_url = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
-      socket = io(socket_url);
-      socket.emit('joinSession', sessionId);
-      socket.on('newAttendance', (attendanceData) => {
-        setLiveAttendance(prev => [...prev, attendanceData]);
-      });
+      // Start polling for new attendance
+      intervalRef.current = setInterval(() => {
+        fetchAttendance(sessionId);
+      }, 5000); // Check for new attendance every 5 seconds
 
     } catch (error) {
       console.error('Error generating QR code:', error);
@@ -92,7 +102,7 @@ function Dashboard() {
         <h2>Welcome, Teacher!</h2>
         <button onClick={handleLogout} style={{ height: '30px' }}>Logout</button>
       </div>
-      <Link to="/register-student">Register a New Student</Link>
+      <Link to="/register">Register a New Student</Link>
       <hr />
       <p>Click the button to generate a new QR code for attendance. It will be valid for 2 minutes.</p>
       {!qrCodeData && (
@@ -108,7 +118,7 @@ function Dashboard() {
       <h3>Live Attendance ({liveAttendance.length})</h3>
       <ul>
         {liveAttendance.map((att, index) => (
-          <li key={index}>{att.name} ({att.roll}) - Marked at {new Date(att.verifiedAt).toLocaleTimeString()}</li>
+          <li key={index}>{att.name} ({att.roll}) - Marked at {new Date(att.verified_at).toLocaleTimeString()}</li>
         ))}
       </ul>
       <hr />
